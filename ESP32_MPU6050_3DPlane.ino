@@ -34,8 +34,13 @@ unsigned long lastDataUpdate = 0;
 const unsigned long DATA_UPDATE_INTERVAL = 20; // Aktualizacja danych co 20ms
 
 // Zmienne referencyjne (dla pozycji zerowej)
-float yprReference[3] = {0, 0, 0}; // Wartości referencyjne dla yaw, pitch, roll
-bool useReferencePosition = false; // Czy używać pozycji referencyjnej
+float yprReference[3] = {0, 0, 0};
+bool useReferencePosition = false;
+
+// Flagi kalibracji postawy
+bool postureCalibrationInProgress = false;
+unsigned long calibrationStartTime = 0;
+const unsigned long POSTURE_CALIBRATION_DURATION = 10000; // 10 sekund w milisekundach
 
 // Zmienne kalibracyjne
 int16_t ax, ay, az;
@@ -66,13 +71,33 @@ void handleRoot()
       <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     </head>
     <body>
-      <h1>Wizualizacja MPU6050</h1>
+      <!-- Overlay kalibracji postawy -->
+      <div id="calibration-overlay" class="active">
+        <div class="calibration-container">
+          <h2>Kalibracja postawy</h2>
+          <div id="calibration-instruction">Usiądź prosto i rozluźnij się</div>
+          <div id="calibration-timer" style="display: none;">10</div>
+          <div id="calibration-progress">
+            <div class="progress-bar"><div class="progress-fill"></div></div>
+          </div>
+          <button id="start-calibration">Rozpocznij kalibrację</button>
+        </div>
+      </div>
+      
+      <h1>Monitor postawy siedzenia</h1>
       <div id="model-container"></div>
+      
+      <div id="posture-status">
+        <div class="status-indicator good"></div>
+        <div class="status-text">Poprawna postawa</div>
+      </div>
+      
       <div id="data-display">
         <p>Yaw: <span id="yaw">0</span>°</p>
         <p>Pitch: <span id="pitch">0</span>°</p>
         <p>Roll: <span id="roll">0</span>°</p>
       </div>
+      
       <div id="control-panel">
         <button id="set-reference-btn" onclick="setReferencePosition()" class="primary-btn">Ustaw bieżącą pozycję jako zerową</button>
         <button id="calibrate-btn" onclick="calibrateSensor()">Kalibruj czujnik</button>
@@ -90,26 +115,22 @@ void handleRoot()
 // Funkcja do wysyłania danych jako JSON
 void handleData()
 {
-  float yawValue, pitchValue, rollValue;
-
+  String json = "{";
   if (useReferencePosition)
   {
-    // Odejmij wartości referencyjne, aby ustalić bieżącą pozycję względem pozycji zerowej
-    yawValue = ypr[0] * 180 / M_PI - yprReference[0];
-    pitchValue = ypr[1] * 180 / M_PI - yprReference[1];
-    rollValue = ypr[2] * 180 / M_PI - yprReference[2];
+    // Jeśli używamy pozycji referencyjnej, odejmujemy wartości referencyjne
+    json += "\"yaw\":" + String((ypr[0] * 180 / M_PI) - yprReference[0]) + ",";
+    json += "\"pitch\":" + String((ypr[1] * 180 / M_PI) - yprReference[1]) + ",";
+    json += "\"roll\":" + String((ypr[2] * 180 / M_PI) - yprReference[2]);
   }
   else
   {
-    // Użyj bezwzględnych wartości
-    yawValue = ypr[0] * 180 / M_PI;
-    pitchValue = ypr[1] * 180 / M_PI;
-    rollValue = ypr[2] * 180 / M_PI;
+    // Bez pozycji referencyjnej, wysyłamy wartości bezpośrednie
+    json += "\"yaw\":" + String(ypr[0] * 180 / M_PI) + ",";
+    json += "\"pitch\":" + String(ypr[1] * 180 / M_PI) + ",";
+    json += "\"roll\":" + String(ypr[2] * 180 / M_PI);
   }
-
-  String json = "{\"yaw\":" + String(yawValue) +
-                ",\"pitch\":" + String(pitchValue) +
-                ",\"roll\":" + String(rollValue) + "}";
+  json += "}";
   server.send(200, "application/json", json);
 }
 
@@ -126,6 +147,10 @@ void handleCSS()
     
     h1 {
       color: #333;
+    }
+    
+    h2 {
+      color: #2196F3;
     }
     
     #model-container {
@@ -197,6 +222,108 @@ void handleCSS()
       color: #666;
       font-style: italic;
     }
+    
+    /* Style dla ekranu kalibracji postawy */
+    #calibration-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.8);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+    }
+    
+    #calibration-overlay.active {
+      display: flex;
+    }
+    
+    .calibration-container {
+      background-color: white;
+      padding: 30px;
+      border-radius: 10px;
+      text-align: center;
+      max-width: 500px;
+    }
+    
+    #calibration-instruction {
+      font-size: 18px;
+      margin: 20px 0;
+    }
+    
+    #calibration-timer {
+      font-size: 72px;
+      font-weight: bold;
+      color: #2196F3;
+      margin: 20px 0;
+    }
+    
+    #calibration-progress {
+      margin: 20px auto;
+      width: 90%;
+    }
+    
+    .progress-bar {
+      height: 20px;
+      background-color: #f0f0f0;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    
+    .progress-fill {
+      height: 100%;
+      background-color: #2196F3;
+      width: 0%;
+      transition: width 1s linear;
+    }
+    
+    #start-calibration {
+      padding: 15px 30px;
+      font-size: 18px;
+      background-color: #2196F3;
+    }
+    
+    /* Style dla statusu postawy */
+    #posture-status {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 20px auto;
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      width: 300px;
+      background-color: #f8f8f8;
+    }
+    
+    .status-indicator {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      margin-right: 10px;
+    }
+    
+    .status-indicator.good {
+      background-color: #4CAF50;
+      box-shadow: 0 0 10px #4CAF50;
+    }
+    
+    .status-indicator.warning {
+      background-color: #FF9800;
+      box-shadow: 0 0 10px #FF9800;
+    }
+    
+    .status-indicator.bad {
+      background-color: #f44336;
+      box-shadow: 0 0 10px #f44336;
+    }
+    
+    .status-text {
+      font-weight: bold;
+    }
   )rawliteral";
 
   server.send(200, "text/css", css);
@@ -206,169 +333,293 @@ void handleCSS()
 void handleJS()
 {
   String js = R"rawliteral(
-    // Inicjalizacja Three.js
-    const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    const renderer = new THREE.WebGLRenderer();
+    // Zmienne globalne
+    let scene, camera, renderer;
+    let airplane;
+    let lastYaw = 0, lastPitch = 0, lastRoll = 0;
+    let isCalibrating = false;
+    let calibrationTime = 10; // sekund
+    let calibrationTimer;
     
-    renderer.setSize(window.innerWidth * 0.8, 400);
-    document.getElementById('model-container').appendChild(renderer.domElement);
+    // Inicjalizacja sceny Three.js
+    function init() {
+      // Utworzenie sceny
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xf0f0f0);
+      
+      // Utworzenie kamery
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth / 400, 0.1, 1000);
+      camera.position.z = 5;
+      
+      // Utworzenie renderera
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, 400);
+      document.getElementById('model-container').appendChild(renderer.domElement);
+      
+      // Dodanie światła
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+      scene.add(ambientLight);
+      
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+      directionalLight.position.set(5, 5, 5);
+      scene.add(directionalLight);
+      
+      // Utworzenie modelu samolotu
+      createAirplane();
+      
+      // Obsługa zmiany rozmiaru okna
+      window.addEventListener('resize', onWindowResize, false);
+    }
     
-    // Dodanie oświetlenia
-    const ambientLight = new THREE.AmbientLight(0x404040);
-    scene.add(ambientLight);
+    // Funkcja obsługująca zmianę rozmiaru okna
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / 400;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, 400);
+    }
     
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(0, 1, 0);
-    scene.add(directionalLight);
-    
-    // Tworzenie prostego modelu samolotu
-    function createPlane() {
-      const group = new THREE.Group();
+    // Utworzenie modelu samolotu
+    function createAirplane() {
+      // Grupa dla całego samolotu
+      airplane = new THREE.Group();
+      
+      // Materiały
+      const bodyMaterial = new THREE.MeshPhongMaterial({ color: 0x0088cc, flatShading: true });
+      const wingMaterial = new THREE.MeshPhongMaterial({ color: 0x3399ff, flatShading: true });
       
       // Korpus
-      const bodyGeometry = new THREE.BoxGeometry(2, 0.5, 5);
-      const bodyMaterial = new THREE.MeshPhongMaterial({ color: 0x3333ff });
+      const bodyGeometry = new THREE.BoxGeometry(1, 0.4, 3);
       const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-      group.add(body);
+      airplane.add(body);
       
       // Skrzydła
-      const wingGeometry = new THREE.BoxGeometry(7, 0.1, 1);
-      const wingMaterial = new THREE.MeshPhongMaterial({ color: 0x3333aa });
-      const wing = new THREE.Mesh(wingGeometry, wingMaterial);
-      wing.position.y = 0;
-      group.add(wing);
+      const wingGeometry = new THREE.BoxGeometry(5, 0.1, 1);
+      const wings = new THREE.Mesh(wingGeometry, wingMaterial);
+      airplane.add(wings);
       
-      // Ogon - część pionowa
-      const tailFinGeometry = new THREE.BoxGeometry(0.1, 1, 0.8);
-      const tailFinMaterial = new THREE.MeshPhongMaterial({ color: 0x3333aa });
-      const tailFin = new THREE.Mesh(tailFinGeometry, tailFinMaterial);
-      tailFin.position.z = -2;
-      tailFin.position.y = 0.5;
-      group.add(tailFin);
+      // Statecznik pionowy
+      const tailGeometry = new THREE.BoxGeometry(0.1, 0.8, 0.5);
+      const tail = new THREE.Mesh(tailGeometry, wingMaterial);
+      tail.position.y = 0.4;
+      tail.position.z = -1.2;
+      airplane.add(tail);
       
-      // Ogon - część pozioma
-      const tailWingGeometry = new THREE.BoxGeometry(2, 0.1, 0.8);
-      const tailWingMaterial = new THREE.MeshPhongMaterial({ color: 0x3333aa });
-      const tailWing = new THREE.Mesh(tailWingGeometry, tailWingMaterial);
-      tailWing.position.z = -2;
-      tailWing.position.y = 0.2;
-      group.add(tailWing);
+      // Stateczniki poziome
+      const horizontalTailGeometry = new THREE.BoxGeometry(1.5, 0.1, 0.5);
+      const horizontalTail = new THREE.Mesh(horizontalTailGeometry, wingMaterial);
+      horizontalTail.position.z = -1.2;
+      airplane.add(horizontalTail);
       
-      return group;
+      // Dodanie samolotu do sceny
+      scene.add(airplane);
     }
     
-    const airplane = createPlane();
-    scene.add(airplane);
-    
-    // Ustawienie kamery
-    camera.position.z = 10;
-    
-    // Funkcja do aktualizacji wartości na stronie
-    function updateDataDisplay(data) {
-      document.getElementById('yaw').textContent = data.yaw.toFixed(2);
-      document.getElementById('pitch').textContent = data.pitch.toFixed(2);
-      document.getElementById('roll').textContent = data.roll.toFixed(2);
-    }
-    
-    // Funkcja do pobierania danych z ESP32
-    function fetchData() {
-      fetch('/data')
-        .then(response => response.json())
-        .then(data => {
-          // Aktualizacja wyświetlanych danych
-          updateDataDisplay(data);
-          
-          // Konwersja stopni na radiany
-          const yaw = data.yaw * Math.PI / 180;
-          const pitch = data.pitch * Math.PI / 180;
-          const roll = data.roll * Math.PI / 180;
-          
-          // Resetowanie rotacji
-          airplane.rotation.set(0, 0, 0);
-          
-          // Zastosowanie rotacji w odpowiedniej kolejności
-          // Uwaga: kolejność rotacji jest ważna!
-          airplane.rotateZ(roll);    // Roll - wokół osi Z
-          airplane.rotateX(pitch);   // Pitch - wokół osi X
-          airplane.rotateY(yaw);     // Yaw - wokół osi Y
-        })
-        .catch(error => console.error('Błąd pobierania danych:', error));
-    }
-    
-    // Funkcja do ustawiania bieżącej pozycji jako pozycji zerowej
-    function setReferencePosition() {
-      const statusMessage = document.getElementById('status-message');
-      statusMessage.textContent = 'Ustawianie pozycji referencyjnej...';
-      
-      fetch('/setReference')
-        .then(response => response.text())
-        .then(data => {
-          statusMessage.textContent = data;
-          setTimeout(() => {
-            statusMessage.textContent = '';
-          }, 5000);
-        })
-        .catch(error => {
-          console.error('Błąd ustawiania pozycji referencyjnej:', error);
-          statusMessage.textContent = 'Błąd ustawiania pozycji referencyjnej!';
-        });
-    }
-    
-    // Funkcja do kalibracji czujnika
-    function calibrateSensor() {
-      const statusMessage = document.getElementById('status-message');
-      statusMessage.textContent = 'Kalibracja w toku... Utrzymaj czujnik nieruchomo.';
-      
-      fetch('/calibrate')
-        .then(response => response.text())
-        .then(data => {
-          statusMessage.textContent = data;
-          setTimeout(() => {
-            statusMessage.textContent = '';
-          }, 5000);
-        })
-        .catch(error => {
-          console.error('Błąd kalibracji:', error);
-          statusMessage.textContent = 'Błąd kalibracji!';
-        });
-    }
-    
-    // Funkcja do resetowania czujnika
-    function resetSensor() {
-      const statusMessage = document.getElementById('status-message');
-      statusMessage.textContent = 'Resetowanie czujnika...';
-      
-      fetch('/reset')
-        .then(response => response.text())
-        .then(data => {
-          statusMessage.textContent = data;
-          setTimeout(() => {
-            statusMessage.textContent = '';
-          }, 5000);
-        })
-        .catch(error => {
-          console.error('Błąd resetowania:', error);
-          statusMessage.textContent = 'Błąd resetowania!';
-        });
-    }
-    
-    // Funkcja animacji
+    // Animacja
     function animate() {
       requestAnimationFrame(animate);
       renderer.render(scene, camera);
     }
+    // Pobieranie danych z ESP32
+function fetchData() {
+  fetch('/data')
+    .then(response => response.json())
+    .then(data => {
+      // Dodajemy filtrowanie dryftu dla osi yaw
+      const yawDeadzone = 0.8; // wartość progowa (w stopniach)
+      if (Math.abs(data.yaw) < yawDeadzone) {
+        data.yaw = 0; // zerujemy małe wartości yaw
+      }
+      
+      // Aktualizacja wyświetlanych wartości
+      document.getElementById('yaw').textContent = data.yaw.toFixed(2);
+      document.getElementById('pitch').textContent = data.pitch.toFixed(2);
+      document.getElementById('roll').textContent = data.roll.toFixed(2);
+      
+      // Łagodne przejście do nowych wartości
+      lastYaw = lerp(lastYaw, data.yaw, 0.3);
+      lastPitch = lerp(lastPitch, data.pitch, 0.3);
+      lastRoll = lerp(lastRoll, data.roll, 0.3);
+      
+      // Aktualizacja rotacji samolotu
+      updateAirplaneRotation(lastYaw, lastPitch, lastRoll);
+      
+      // Aktualizacja statusu postawy
+      updatePostureStatus(data);
+    })
+    .catch(error => console.error('Błąd pobierania danych:', error));
+}
     
-    // Obsługa zmiany rozmiaru okna
-    window.addEventListener('resize', () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth * 0.8, 400);
+    // Aktualizacja statusu postawy
+    function updatePostureStatus(data) {
+      const indicator = document.querySelector('.status-indicator');
+      const statusText = document.querySelector('.status-text');
+      
+      // Obliczamy ogólne odchylenie od pozycji referencyjnej
+      const deviationThreshold = 10; // Próg w stopniach
+      const totalDeviation = Math.abs(data.pitch) + Math.abs(data.roll);
+      
+      if (totalDeviation < deviationThreshold) {
+        indicator.className = 'status-indicator good';
+        statusText.textContent = 'Poprawna postawa';
+      } else if (totalDeviation < deviationThreshold * 2) {
+        indicator.className = 'status-indicator warning';
+        statusText.textContent = 'Lekkie odchylenie postawy';
+      } else {
+        indicator.className = 'status-indicator bad';
+        statusText.textContent = 'Nieprawidłowa postawa';
+      }
+    }
+    
+    // Funkcja interpolacji liniowej
+    function lerp(start, end, amt) {
+      return (1 - amt) * start + amt * end;
+    }
+    
+    // Aktualizacja rotacji samolotu
+    function updateAirplaneRotation(yaw, pitch, roll) {
+      if (airplane) {
+        // Konwersja z stopni na radiany
+        const yawRad = THREE.MathUtils.degToRad(yaw);
+        const pitchRad = THREE.MathUtils.degToRad(-roll);
+        const rollRad = THREE.MathUtils.degToRad(pitch);
+        
+        // Resetowanie rotacji
+        airplane.rotation.set(0, 0, 0);
+        
+        // Zastosowanie nowych rotacji
+        airplane.rotateZ(rollRad);
+        airplane.rotateX(pitchRad);
+        airplane.rotateY(yawRad);
+      }
+    }
+    
+    // Funkcja kalibracji czujnika
+    function calibrateSensor() {
+      document.getElementById('status-message').textContent = 'Kalibrowanie czujnika...';
+      
+      fetch('/calibrate')
+        .then(response => response.text())
+        .then(data => {
+          document.getElementById('status-message').textContent = 'Kalibracja zakończona';
+          setTimeout(() => {
+            document.getElementById('status-message').textContent = '';
+          }, 3000);
+        })
+        .catch(error => {
+          document.getElementById('status-message').textContent = 'Błąd kalibracji';
+          console.error('Błąd kalibracji:', error);
+        });
+    }
+    
+    // Funkcja resetowania czujnika
+    function resetSensor() {
+      document.getElementById('status-message').textContent = 'Resetowanie czujnika...';
+      
+      fetch('/reset')
+        .then(response => response.text())
+        .then(data => {
+          document.getElementById('status-message').textContent = 'Reset zakończony';
+          setTimeout(() => {
+            document.getElementById('status-message').textContent = '';
+          }, 3000);
+        })
+        .catch(error => {
+          document.getElementById('status-message').textContent = 'Błąd resetowania';
+          console.error('Błąd resetowania:', error);
+        });
+    }
+    
+    // Funkcja ustawiania pozycji referencyjnej
+    function setReferencePosition() {
+      document.getElementById('status-message').textContent = 'Ustawianie pozycji referencyjnej...';
+      
+      fetch('/setReference')
+        .then(response => response.text())
+        .then(data => {
+          document.getElementById('status-message').textContent = 'Ustawiono pozycję referencyjną';
+          setTimeout(() => {
+            document.getElementById('status-message').textContent = '';
+          }, 3000);
+        })
+        .catch(error => {
+          document.getElementById('status-message').textContent = 'Błąd ustawiania pozycji';
+          console.error('Błąd ustawiania pozycji:', error);
+        });
+    }
+    
+    // Funkcja rozpoczynająca kalibrację postawy
+    function startPostureCalibration() {
+      isCalibrating = true;
+      const overlay = document.getElementById('calibration-overlay');
+      const instruction = document.getElementById('calibration-instruction');
+      const timerEl = document.getElementById('calibration-timer');
+      const startButton = document.getElementById('start-calibration');
+      const progressFill = document.querySelector('.progress-fill');
+      
+      startButton.style.display = 'none';
+      timerEl.style.display = 'block';
+      instruction.textContent = 'Pozostań nieruchomo w prawidłowej pozycji';
+      
+      // Ustawienie timera odliczającego 10 sekund
+      let timeLeft = calibrationTime;
+      timerEl.textContent = timeLeft;
+      
+      // Wysyłamy sygnał do ESP32, że rozpoczynamy kalibrację
+      fetch('/startPostureCalibration')
+        .then(response => response.text())
+        .then(data => {
+          console.log(data);
+        });
+      
+      calibrationTimer = setInterval(() => {
+        timeLeft--;
+        timerEl.textContent = timeLeft;
+        
+        // Aktualizacja paska postępu
+        const progress = ((calibrationTime - timeLeft) / calibrationTime) * 100;
+        progressFill.style.width = `${progress}%`;
+        
+        if (timeLeft <= 0) {
+          clearInterval(calibrationTimer);
+          
+          // Kalibracja zakończona
+          completeCalibration();
+        }
+      }, 1000);
+    }
+    
+    // Funkcja kończąca kalibrację
+    function completeCalibration() {
+      const overlay = document.getElementById('calibration-overlay');
+      const instruction = document.getElementById('calibration-instruction');
+      const timerEl = document.getElementById('calibration-timer');
+      
+      // Ustawienie referencyjnej pozycji
+      fetch('/setPostureReference')
+        .then(response => response.text())
+        .then(data => {
+          instruction.textContent = 'Kalibracja zakończona pomyślnie!';
+          timerEl.style.display = 'none';
+          
+          // Po 2 sekundach ukrywamy overlay i pokazujemy główny interfejs
+          setTimeout(() => {
+            overlay.classList.remove('active');
+            isCalibrating = false;
+          }, 2000);
+        });
+    }
+    
+    // Inicjalizacja po załadowaniu strony
+    document.addEventListener('DOMContentLoaded', function() {
+      init();
+      
+      // Inicjalizacja przycisków
+      document.getElementById('start-calibration').addEventListener('click', startPostureCalibration);
+      
+      // Rozpoczęcie pobierania danych i animacji
+      animate();
+      setInterval(fetchData, 250); // Pobieranie danych co 250ms zamiast 100ms
     });
-    
-    // Rozpoczęcie pobierania danych i animacji
-    animate();
-    setInterval(fetchData, 250); // Pobieranie danych co 250ms zamiast 100ms
   )rawliteral";
 
   server.send(200, "application/javascript", js);
@@ -459,6 +710,35 @@ void handleSetReference()
   Serial.println(yprReference[2]);
 }
 
+// Funkcja rozpoczynająca kalibrację postawy
+void handleStartPostureCalibration()
+{
+  Serial.println("Rozpoczęcie kalibracji postawy...");
+  postureCalibrationInProgress = true;
+  calibrationStartTime = millis();
+  server.send(200, "text/plain", "Rozpoczęto proces kalibracji postawy");
+}
+
+// Funkcja ustawiająca referencyjną pozycję postawy
+void handleSetPostureReference()
+{
+  // Ustawienie bieżącej wartości jako referencyjnej
+  yprReference[0] = ypr[0] * 180 / M_PI;
+  yprReference[1] = ypr[1] * 180 / M_PI;
+  yprReference[2] = ypr[2] * 180 / M_PI;
+  useReferencePosition = true;
+
+  Serial.println("Ustawiono referencyjną pozycję postawy:");
+  Serial.print("Yaw: ");
+  Serial.print(yprReference[0]);
+  Serial.print(", Pitch: ");
+  Serial.print(yprReference[1]);
+  Serial.print(", Roll: ");
+  Serial.println(yprReference[2]);
+
+  server.send(200, "text/plain", "Ustawiono referencyjną pozycję postawy");
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -542,6 +822,8 @@ void setup()
   server.on("/calibrate", HTTP_GET, handleCalibrate);
   server.on("/reset", HTTP_GET, handleReset);
   server.on("/setReference", HTTP_GET, handleSetReference);
+  server.on("/startPostureCalibration", HTTP_GET, handleStartPostureCalibration);
+  server.on("/setPostureReference", HTTP_GET, handleSetPostureReference);
 
   // Uruchomienie serwera
   server.begin();
@@ -640,6 +922,21 @@ void loop()
           mpu.resetFIFO();
         }
       }
+      else if (postureCalibrationInProgress)
+      {
+        // Sprawdź czy upłynął czas kalibracji postawy
+        if (currentMillis - calibrationStartTime >= POSTURE_CALIBRATION_DURATION)
+        {
+          postureCalibrationInProgress = false;
+          Serial.println("Kalibracja postawy zakończona automatycznie");
+        }
+
+        // W czasie kalibracji postawy tylko odczytujemy dane, ale nie zmieniamy żadnych offsetów
+        // Pobranie wartości Eulera (yaw, pitch, roll)
+        mpu.dmpGetQuaternion(&q, fifoBuffer);
+        mpu.dmpGetGravity(&gravity, &q);
+        mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+      }
       else
       {
         // Pobranie wartości Eulera (yaw, pitch, roll)
@@ -662,4 +959,4 @@ void loop()
       }
     }
   }
-} // kuku 6
+} // kuku 15.1
