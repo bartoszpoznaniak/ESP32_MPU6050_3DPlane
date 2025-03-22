@@ -455,7 +455,7 @@ function fetchData() {
       const statusText = document.querySelector('.status-text');
       
       // Obliczamy ogólne odchylenie od pozycji referencyjnej
-      const deviationThreshold = 10; // Próg w stopniach
+      const deviationThreshold = 2; // Próg w stopniach
       const totalDeviation = Math.abs(data.pitch) + Math.abs(data.roll);
       
       if (totalDeviation < deviationThreshold) {
